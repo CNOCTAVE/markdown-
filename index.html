@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Markdown 编辑器</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* 顶栏 */
+    .topbar {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 16px; background: #1e293b; color: #fff;
+      flex-shrink: 0;
+    }
+    .topbar .title { font-weight: bold; font-size: 16px; margin-right: 12px; }
+    .topbar .filename { color: #94a3b8; font-size: 14px; }
+    .topbar button {
+      padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer;
+      background: #3b82f6; color: #fff; font-size: 14px;
+    }
+    .topbar button:hover { background: #2563eb; }
+    .topbar button.save { background: #22c55e; }
+    .topbar button.save:hover { background: #16a34a; }
+    .topbar button:disabled { background: #475569; cursor: not-allowed; }
+
+    /* 主体：左编辑 右预览 */
+    .main { display: flex; flex: 1; overflow: hidden; }
+    .editor {
+      width: 50%; border: none; resize: none; outline: none;
+      padding: 16px; font-size: 15px; line-height: 1.6;
+      font-family: Consolas, "Courier New", monospace;
+      border-right: 1px solid #e2e8f0;
+    }
+    .preview {
+      width: 50%; overflow-y: auto; padding: 20px 24px; background: #fafafa;
+    }
+    .preview h1, .preview h2, .preview h3 { margin: 16px 0 8px; }
+    .preview p { margin: 8px 0; }
+    .preview pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    .preview code { font-family: Consolas, monospace; }
+    .preview table { border-collapse: collapse; margin: 8px 0; }
+    .preview th, .preview td { border: 1px solid #cbd5e1; padding: 6px 12px; }
+    .preview blockquote { border-left: 4px solid #94a3b8; padding-left: 12px; color: #64748b; margin: 8px 0; }
+
+    /* 样式设置弹窗 */
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(15, 23, 42, 0.5);
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    .modal {
+      background: #fff; border-radius: 8px; width: 480px; max-width: 92vw;
+      max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    }
+    .modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 18px; border-bottom: 1px solid #e2e8f0;
+      font-weight: bold; font-size: 15px;
+    }
+    .modal-close { background: none; border: none; font-size: 16px; cursor: pointer; color: #64748b; }
+    .modal-body { padding: 16px 18px; overflow-y: auto; }
+    .modal-body h4 { margin: 8px 0 10px; font-size: 14px; color: #334155; }
+    .setting-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .setting-row label { width: 110px; font-size: 14px; color: #475569; flex-shrink: 0; }
+    .setting-row select {
+      flex: 1; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;
+    }
+    .custom-css {
+      width: 100%; height: 140px; border: 1px solid #cbd5e1; border-radius: 4px;
+      padding: 10px; font-family: Consolas, monospace; font-size: 13px;
+      resize: vertical; outline: none;
+    }
+    .custom-css:focus { border-color: #3b82f6; }
+    .modal-footer {
+      display: flex; justify-content: flex-end; gap: 10px;
+      padding: 12px 18px; border-top: 1px solid #e2e8f0;
+    }
+    .modal-footer button {
+      padding: 7px 18px; border: none; border-radius: 4px; cursor: pointer;
+      background: #64748b; color: #fff; font-size: 14px;
+    }
+    .modal-footer button.save { background: #3b82f6; }
+    .modal-footer button:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <span class="title">📝 Markdown 编辑器</span>
+    <button @click="openFileDialog">打开文件</button>
+    <button class="save" :disabled="!currentFile" @click="saveFile">保存</button>
+    <button @click="openSettings">样式设置</button>
+    <span class="filename">{{ currentFile || '未打开文件' }}</span>
+    <input type="file" ref="fileInput" accept=".md,.markdown,text/markdown" style="display:none" @change="onFileSelected">
+  </div>
+
+  <!-- 样式设置弹窗 -->
+  <div class="modal-mask" v-if="showSettings" @click.self="showSettings = false">
+    <div class="modal">
+      <div class="modal-header">
+        <span>样式设置</span>
+        <button class="modal-close" @click="showSettings = false">✕</button>
+      </div>
+      <div class="modal-body">
+        <section>
+          <h4>按语法设置</h4>
+          <div class="setting-row" v-for="item in syntaxSettingsDef" :key="item.key">
+            <label>{{ item.label }}</label>
+            <select v-model="syntaxSettings[item.key]">
+              <option v-for="opt in item.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+        </section>
+        <section>
+          <h4>自定义 CSS（直接粘贴）</h4>
+          <textarea class="custom-css" v-model="customCss" placeholder="例如：&#10;.preview h1 { color: purple; }&#10;.preview p { line-height: 2; }"></textarea>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button @click="resetSettings">恢复默认</button>
+        <button @click="cancelSettings">取消</button>
+        <button class="save" @click="showSettings = false">应用</button>
+      </div>
+    </div>
+  </div>
+  <div class="main">
+    <textarea class="editor" v-model="content" placeholder="在此输入 Markdown 内容..." spellcheck="false"></textarea>
+    <div class="preview" v-html="previewHtml"></div>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, computed, watch, watchEffect } = Vue;
+const API = 'http://localhost:8030';
+
+// 显式开启 GFM（表格支持）
+marked.setOptions({ gfm: true, breaks: true });
+
+// 修正中文输入导致的表格解析失败：全角竖线/破折号转半角、去掉表格行前的缩进
+function normalizeTables(md) {
+  return (md || '').split('\n').map(line => {
+    if (/[｜—]/.test(line) || /^\s+\|/.test(line)) {
+      return line.replace(/｜/g, '|').replace(/[—―－]{2,}/g, '---').replace(/^\s+/, '');
+    }
+    return line;
+  }).join('\n');
+}
+
+createApp({
+  setup() {
+    const content = ref('');
+    const currentFile = ref('');
+    const filePath = ref('');
+    const fileInput = ref(null);
+    const showSettings = ref(false);
+    const customCss = ref('');
+
+    // 每种 markdown 语法对应的可选样式
+    const syntaxSettingsDef = [
+      { key: 'heading', label: '标题 h1~h3', options: [
+        { value: 'default', label: '默认' },
+        { value: 'underline', label: '下边框线' },
+        { value: 'center', label: '居中' },
+        { value: 'accent', label: '蓝色强调' },
+      ]},
+      { key: 'paragraph', label: '正文段落', options: [
+        { value: 'default', label: '默认' },
+        { value: 'large', label: '大字号 (17px)' },
+        { value: 'loose', label: '宽松行距 (2.0)' },
+        { value: 'gray', label: '灰色文字' },
+      ]},
+      { key: 'code', label: '代码块', options: [
+        { value: 'default', label: '默认（深色底）' },
+        { value: 'light', label: '浅色底' },
+        { value: 'border', label: '白底带边框' },
+      ]},
+      { key: 'blockquote', label: '引用块', options: [
+        { value: 'default', label: '默认（灰色）' },
+        { value: 'blue', label: '蓝色' },
+        { value: 'green', label: '绿色' },
+        { value: 'bg', label: '带背景色' },
+      ]},
+      { key: 'table', label: '表格', options: [
+        { value: 'default', label: '默认（细边框）' },
+        { value: 'striped', label: '斑马纹' },
+        { value: 'dark', label: '深色表头' },
+      ]},
+      { key: 'link', label: '链接', options: [
+        { value: 'default', label: '默认（蓝色）' },
+        { value: 'underline', label: '带下划线' },
+        { value: 'green', label: '绿色' },
+      ]},
+    ];
+
+    const DEFAULT_SETTINGS = Object.fromEntries(syntaxSettingsDef.map(d => [d.key, 'default']));
+    const saved = localStorage.getItem('md_style_settings');
+    const syntaxSettings = ref(saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : { ...DEFAULT_SETTINGS });
+    customCss.value = localStorage.getItem('md_custom_css') || '';
+
+    // 根据设置生成作用域为 .preview 的 CSS
+    const dynamicCss = computed(() => {
+      const s = syntaxSettings.value;
+      const css = [];
+      if (s.heading === 'underline') css.push('.preview h1,.preview h2,.preview h3{border-bottom:2px solid #e2e8f0;padding-bottom:4px}');
+      if (s.heading === 'center') css.push('.preview h1,.preview h2,.preview h3{text-align:center}');
+      if (s.heading === 'accent') css.push('.preview h1,.preview h2,.preview h3{color:#2563eb}');
+      if (s.paragraph === 'large') css.push('.preview p{font-size:17px}');
+      if (s.paragraph === 'loose') css.push('.preview p{line-height:2}');
+      if (s.paragraph === 'gray') css.push('.preview p{color:#64748b}');
+      if (s.code === 'light') css.push('.preview pre{background:#f1f5f9;color:#1e293b}');
+      if (s.code === 'border') css.push('.preview pre{background:#fff;color:#1e293b;border:1px solid #cbd5e1}');
+      if (s.blockquote === 'blue') css.push('.preview blockquote{border-color:#3b82f6;color:#1d4ed8}');
+      if (s.blockquote === 'green') css.push('.preview blockquote{border-color:#22c55e;color:#15803d}');
+      if (s.blockquote === 'bg') css.push('.preview blockquote{background:#f1f5f9;border-color:#94a3b8;padding:8px 12px;border-radius:4px}');
+      if (s.table === 'striped') css.push('.preview tr:nth-child(even){background:#f1f5f9}');
+      if (s.table === 'dark') css.push('.preview th{background:#1e293b;color:#fff;border-color:#1e293b}');
+      if (s.link === 'underline') css.push('.preview a{text-decoration:underline}');
+      if (s.link === 'green') css.push('.preview a{color:#16a34a}');
+      return css.join('\n') + '\n' + customCss.value;
+    });
+
+    // Vue 模板编译器会丢弃模板内的 <style> 标签，
+    // 因此手动创建 style 元素，动态样式变化时直接写入其 textContent
+    const dynamicStyleEl = document.createElement('style');
+    document.head.appendChild(dynamicStyleEl);
+    watchEffect(() => { dynamicStyleEl.textContent = dynamicCss.value; });
+
+    // 设置变化时持久化
+    function persistSettings() {
+      localStorage.setItem('md_style_settings', JSON.stringify(syntaxSettings.value));
+      localStorage.setItem('md_custom_css', customCss.value);
+    }
+    watch([syntaxSettings, customCss], persistSettings, { deep: true });
+
+    // 打开弹窗时快照当前样式，取消时回滚
+    let snapshot = { settings: '', css: '' };
+    function openSettings() {
+      snapshot.settings = JSON.stringify(syntaxSettings.value);
+      snapshot.css = customCss.value;
+      showSettings.value = true;
+    }
+    function cancelSettings() {
+      syntaxSettings.value = JSON.parse(snapshot.settings);
+      customCss.value = snapshot.css;
+      showSettings.value = false;
+    }
+    function resetSettings() {
+      syntaxSettings.value = { ...DEFAULT_SETTINGS };
+      customCss.value = '';
+      persistSettings();
+    }
+
+    const previewHtml = computed(() => marked.parse(normalizeTables(content.value || '')));
+
+    // 通过系统文件选择器选择文件，读取本地内容并在后端登记路径
+    async function openFileDialog() {
+      fileInput.value.click();
+    }
+
+    async function onFileSelected(e) {
+      const f = e.target.files[0];
+      if (!f) return;
+      content.value = await f.text();
+      currentFile.value = f.name;
+      filePath.value = f.name;
+      // 询问后端文件内容，保证与磁盘同步（若后端可读）
+      try {
+        const res = await axios.get(`${API}/api/file`, { params: { name: f.name } });
+        content.value = res.data.content;
+        filePath.value = res.data.path;
+      } catch (err) {
+        // 文件不在后端目录下，忽略，使用本地读取的内容
+        console.warn('后端未找到该文件，使用本地内容', err);
+      }
+      e.target.value = '';
+    }
+
+    async function saveFile() {
+      if (!filePath.value) return;
+      try {
+        await axios.post(`${API}/api/file`, {
+          path: filePath.value,
+          content: content.value,
+        });
+        alert('保存成功');
+      } catch (err) {
+        alert('保存失败：' + (err.response?.data?.detail || err.message));
+      }
+    }
+
+    return { content, currentFile, previewHtml, fileInput, openFileDialog, onFileSelected, saveFile,
+             showSettings, customCss, syntaxSettingsDef, syntaxSettings, dynamicCss, resetSettings,
+             openSettings, cancelSettings };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
