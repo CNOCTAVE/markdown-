@@ -1,3 +1,8 @@
+# 八度君（b站id：CNOCTAVE）
+# https://space.bilibili.com/1888473666
+# 关注点赞转发收藏充电，祝我走向1000粉丝之路
+# the MIT License (MIT)
+
 import os
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
